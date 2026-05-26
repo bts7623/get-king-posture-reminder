@@ -1,5 +1,5 @@
 @echo off
-set VER=v1.0.0
+set VER=v1.0.1
 set NAME=posture_reminder_%VER%
 
 pip install pyinstaller --quiet

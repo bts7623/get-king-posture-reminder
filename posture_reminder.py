@@ -16,6 +16,7 @@ import os
 import math
 import random
 import subprocess
+import json
 from datetime import datetime
 
 try:
@@ -50,7 +51,7 @@ from PIL import Image, ImageDraw
 
 # ── 상수 ──────────────────────────────────────────────────────────────────
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 ALL_MONITORS = -1   # target_monitor_index 특수값: 모든 모니터에 동시 표시
 
@@ -71,6 +72,8 @@ ANIM_INTERVAL_MS = 550
 PID_FILE = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")), "posture_reminder.pid")
 APP_REG_NAME = "PostureReminder"
 REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "PostureReminder")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 
 
 # ── 중복 실행 방지 ─────────────────────────────────────────────────────────
@@ -143,7 +146,9 @@ class PostureReminder:
         self.last_notified: float | None = None  # 실제 알림이 울린 시각
         self.icon = None
         self.scene_index = 0
+        self.scene_queue: list[int] = []   # 셔플 큐 — 비면 다시 채움
         self.target_monitor_index = 0
+        self._load_settings()
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -157,6 +162,30 @@ class PostureReminder:
             self._draw_neck_tilt,
             self._draw_shoulder_shrug,
         ]
+
+    # ── 설정 저장/불러오기 ────────────────────────────────────────────────
+
+    def _load_settings(self):
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+            self.interval_minutes = int(data.get("interval_minutes", DEFAULT_INTERVAL))
+            self.duration_seconds = int(data.get("duration_seconds", DEFAULT_DURATION))
+            self.target_monitor_index = int(data.get("target_monitor_index", 0))
+        except Exception:
+            pass  # 파일 없거나 손상 시 기본값 유지
+
+    def _save_settings(self):
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "interval_minutes": self.interval_minutes,
+                    "duration_seconds": self.duration_seconds,
+                    "target_monitor_index": self.target_monitor_index,
+                }, f, indent=2)
+        except Exception:
+            pass
 
     # ── 모니터 감지 ───────────────────────────────────────────────────────
 
@@ -457,11 +486,16 @@ class PostureReminder:
     # ── 자세 알림 팝업 ─────────────────────────────────────────────────────
 
     def _show_reminder(self, monitor_index=None, preview=False):
-        scene_idx = self.scene_index % len(self.scenes)
-        draw_fn = self.scenes[scene_idx]
-        if not preview:
-            self.scene_index += 1
+        if preview:
+            scene_idx = self.scene_index % len(self.scenes)
+        else:
+            if not self.scene_queue:
+                self.scene_queue = list(range(len(self.scenes)))
+                random.shuffle(self.scene_queue)
+            scene_idx = self.scene_queue.pop(0)
             self.last_notified = time.time()
+
+        draw_fn = self.scenes[scene_idx]
 
         W, H = 520, 430
         target = monitor_index if monitor_index is not None else self.target_monitor_index
@@ -1074,6 +1108,7 @@ class PostureReminder:
             self.target_monitor_index = monitor_var.get()
             self.last_shown = time.time()
             self._set_autostart(auto_var.get())
+            self._save_settings()
             info.config(
                 text=f"저장됨!  {self.interval_minutes}분 / {self.duration_seconds}초 / 모니터 {self.target_monitor_index + 1}",
                 fg=ACC)
